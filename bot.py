@@ -1,43 +1,80 @@
 import os
 import logging
+import requests
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Logging sozlash
 logging.basicConfig(level=logging.INFO)
 
-# Bot tokenini olish
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# Render'dan atrof-muhit o'zgaruvchilarini olish
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+
+# DeepSeek API sozlamalari
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 # Flask ilovasi
 app = Flask(__name__)
 
-# Bot va dispatcher
-bot = Bot(token=TOKEN)
-dispatcher = Dispatcher(bot, None, use_context=True)
+# Bot va Application
+bot = Bot(token=TELEGRAM_TOKEN)
+application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Handlerlar
-def start(update, context):
-    update.message.reply_text("Assalomu alaykum! Bot ishga tushdi.")
+# /start komandasi
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Assalomu alaykum! Men DeepSeek AI bilan ishlaydigan botman. Savollaringizni yozing.")
 
-def echo(update, context):
-    update.message.reply_text(update.message.text)
+# Xabarlarni qayta ishlash
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    
+    try:
+        response = requests.post(
+            DEEPSEEK_API_URL,
+            headers={
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "Siz yordamchi AI botsiz."},
+                    {"role": "user", "content": user_message}
+                ],
+                "temperature": 0.7,
+                "max_tokens": 2048,
+                "stream": False
+            },
+            timeout=30
+        )
+        
+        response.raise_for_status()
+        data = response.json()
+        ai_response = data["choices"][0]["message"]["content"]
+        await update.message.reply_text(ai_response)
+        
+    except requests.exceptions.Timeout:
+        await update.message.reply_text("❌ So'rov vaqti tugadi. Qayta urinib ko'ring.")
+    except Exception as e:
+        logging.error(f"API xatosi: {e}")
+        await update.message.reply_text("❌ Xatolik yuz berdi. Keyinroq urinib ko'ring.")
 
-# Handlerlarni ro'yxatdan o'tkazish
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+# Handlerlarni qo'shish
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-@app.route(f"/{TOKEN}", methods=['POST'])
+@app.route(f"/{TELEGRAM_TOKEN}", methods=['POST'])
 def webhook():
     """Telegram webhook endpoint"""
     update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
+    application.process_update(update)
     return "OK", 200
 
 @app.route('/')
 def index():
-    return "Bot ishga tushdi!"
+    return "Bot ishga tushdi! DeepSeek API ulangan."
 
 @app.route('/health')
 def health():
